@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Амьд Бие — WebAR Final</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#000; color:#fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #wrap { position:relative; width:100%; height:100vh; overflow:hidden; }
+    #video { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; transform: scaleX(-1); }
+    #webgl { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+    #msg { position:absolute; top:64px; left:0; right:0; text-align:center; font-size:18px; text-shadow:0 2px 8px rgba(0,0,0,.7); padding:0 16px; }
+    .child { position:absolute; right:6%; bottom:18%; width:min(28%, 220px); opacity:0; transition:opacity .8s ease; pointer-events:none; }
+    .visible { opacity:1 !important; }
+    .ui { position:absolute; left:0; right:0; bottom:40px; padding:12px; display:flex; gap:8px; justify-content:center; }
+    button { padding:12px 16px; border:0; border-radius:12px; font-weight:600; cursor:pointer; }
+    .primary { background:#ff7b47; color:#000; }
+    .ghost { background:rgba(255,255,255,.18); color:#fff; }
+    #timeline { position:absolute; left:0; right:0; bottom:0; height:4px; background:rgba(255,255,255,.12); }
+    #progress { height:100%; width:0%; background:linear-gradient(90deg, #ff3b3b, #ff9a3b); transition: width .2s linear; }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="webgl"></canvas>
+  <img id="child" class="child" src="assets/svg/child.svg" alt="child"/>
+  <div id="msg"></div>
+  <div class="ui">
+    <button class="ghost" id="playAudio">▶️ Play Audio</button>
+    <button class="primary" id="cta">Амьдралаа хамгаал</button>
+  </div>
+  <div id="timeline"><div id="progress"></div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/examples/js/loaders/GLTFLoader.min.js"></script>
+<script>
+const video = document.getElementById('video');
+const canvas3d = document.getElementById('webgl');
+const msg = document.getElementById('msg');
+const childImg = document.getElementById('child');
+const progressBar = document.getElementById('progress');
+const btnPlay = document.getElementById('playAudio');
+
+let renderer, scene, camera, clock = new THREE.Clock();
+let totalDuration = 18; // seconds
+
+// Audio (.m4a) from your uploads
+const A = {
+  d1: new Audio('assets/audio/dictor1.m4a'),
+  d2: new Audio('assets/audio/dictor2.m4a'),
+  d3: new Audio('assets/audio/dictor3.m4a'),
+  d4: new Audio('assets/audio/dictor4.m4a'),
+  c1: new Audio('assets/audio/child1.m4a'),
+  c2: new Audio('assets/audio/child2.m4a')
+};
+for (const k in A){ A[k].volume = 0.95; A[k].preload = 'auto'; }
+
+function animate(){
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  const p = Math.min(1, t / totalDuration);
+  progressBar.style.width = (p * 100) + '%';
+  renderer && renderer.render(scene, camera);
+}
+
+async function initCam(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio:false });
+    video.srcObject = stream;
+    video.onloadedmetadata = ()=>{
+      init3D();
+      onResize();
+      window.addEventListener('resize', onResize);
+      animate();
+      primeUI();
+    };
+  }catch(e){
+    msg.textContent = 'Разреши камерата (HTTPS/localhost).';
+  }
+}
+
+function init3D(){
+  renderer = new THREE.WebGLRenderer({ canvas: canvas3d, alpha:true, antialias:true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+  camera.position.set(0,0,6);
+  scene.add(new THREE.DirectionalLight(0xffffff,1.1).position.set(1,2,2));
+  scene.add(new THREE.AmbientLight(0xffffff,0.6));
+  new THREE.GLTFLoader().load('assets/models/lungs.gltf', g=>scene.add(g.scene), undefined, ()=>{});
+}
+
+function onResize(){
+  const w = canvas3d.clientWidth = video.clientWidth;
+  const h = canvas3d.clientHeight = video.clientHeight;
+  renderer.setSize(w,h,false);
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+
+function primeUI(){
+  msg.textContent = 'Натисни ▶️ Play Audio, за да започне озвучаването.';
+  btnPlay.addEventListener('click', startSequence, { once:true });
+}
+
+async function startSequence(){
+  clock.start();
+  try {
+    msg.textContent = 'Чи өөрийгөө харж байна уу?';
+    await A.d1.play();
+    msg.textContent = 'Энэ бол таны уушги... хэрвээ та өдөр бүр тамхи татвал.';
+    await A.d2.play();
+    await A.c1.play(); // кашляне
+    childImg.classList.add('visible');
+    msg.textContent = 'Таны утаа намайг хордуулж байна...';
+    await A.c2.play();
+    msg.textContent = 'Гэхдээ зөвхөн та биш... таны хажууд байгаа хүүхэд ч бас хорлогдож байна.';
+    await A.d3.play();
+    msg.textContent = 'Өнөөдөр тамхинаас татгалзах нь таны амьдралыг аврах төдийгүй, хүүхдүүдийн амьдралыг хамгаална.';
+    await A.d4.play();
+  } catch(e){ console.warn(e); }
+}
+
+document.getElementById('cta').addEventListener('click', ()=>{
+  alert('Амьдралаа хамгаал ▶ Следващ модул');
+});
+
+// basic setup
+const canvas3d = document.getElementById('webgl');
+initCam();
+</script>
+</body>
+</html>
