@@ -1,2 +1,126 @@
 
-    
+   <!doctype html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Амьд Бие — WebAR (Subtitles Only, Safari Fix)</title>
+  <style>
+    html,body{margin:0;height:100%;background:#000;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    #wrap{position:relative;height:100vh;overflow:hidden}
+    #video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+    #webgl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+    #msg{position:absolute;left:0;right:0;top:64px;text-align:center;font-size:20px;line-height:1.45;text-shadow:0 2px 8px rgba(0,0,0,.7);padding:0 16px}
+    .child{position:absolute;right:6%;bottom:18%;width:min(28%,220px);opacity:0;transition:opacity .8s}
+    .visible{opacity:1!important}
+    .ui{position:absolute;left:0;right:0;bottom:40px;display:flex;gap:8px;justify-content:center}
+    button{padding:12px 16px;border:0;border-radius:12px;font-weight:700;cursor:pointer}
+    .ghost{background:rgba(255,255,255,.18);color:#fff}
+    .primary{background:#ff7b47;color:#000}
+    #timeline{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(255,255,255,.12)}
+    #progress{height:100%;width:0%;background:linear-gradient(90deg,#ff3b3b,#ff9a3b)}
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="webgl"></canvas>
+  <img id="child" class="child" src="assets/svg/child.svg" alt="child">
+  <div id="msg"></div>
+  <div class="ui">
+    <button class="ghost" id="start">▶️ Стартирай</button>
+    <button class="primary" id="cta">Амьдралаа хамгаал</button>
+  </div>
+  <div id="timeline"><div id="progress"></div></div>
+</div>
+
+<!-- по избор: three.js за 3D белите дробове -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/examples/js/loaders/GLTFLoader.min.js"></script>
+<script>
+const SITE_URL = "https://stefan064113.github.io/amid-bie-webar/";
+const v = document.getElementById('video');
+const msg = document.getElementById('msg');
+const childImg = document.getElementById('child');
+const progressBar = document.getElementById('progress');
+
+let total = 18, start = 0, raf;
+
+// Прогрес лента
+function tick(){
+  const t = (performance.now()-start)/1000;
+  const p = Math.min(1, t/total);
+  progressBar.style.width = (p*100)+'%';
+  raf = requestAnimationFrame(tick);
+}
+
+// Камера
+(async function initCam(){
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({ video:{facingMode:'user'}, audio:false });
+    v.srcObject = s;
+  }catch(e){
+    msg.textContent = 'Разреши камерата (HTTPS/localhost).';
+  }
+})();
+
+// CTA → към същия линк
+document.getElementById('cta').addEventListener('click', ()=>{ location.href = SITE_URL; });
+
+// Субтитри по тайминг (без аудио)
+const SCRIPT = [
+  { t: 0,  text: 'Чи өөрийгөө харж байна уу?' },
+  { t: 4,  text: 'Энэ бол таны уушги... хэрвээ та өдөр бүр тамхи татвал.' },
+  { t: 8,  text: 'Кхх... (кашляне) — хүүхэд тань хажууд байна.' , showChild: true },
+  { t: 11, text: 'Таны утаа намайг хордуулж байна...' },
+  { t: 14, text: 'Гэхдээ зөвхөн та биш... таны хажууд байгаа хүүхэд ч бас хорлогдож байна.' },
+  { t: 16, text: 'Өнөөдөр тамхинаас татгалз— амьдралаа хамгаал.' }
+];
+
+// Старт на сценария (+ Safari fix за тайминг)
+document.getElementById('start').addEventListener('click', ()=>{
+  start = performance.now();
+  cancelAnimationFrame(raf); tick();
+  childImg.classList.remove('visible');
+  msg.textContent = '';
+
+  let i = 0;
+  function step(){
+    const t = (performance.now()-start)/1000;
+    while (i < SCRIPT.length && t >= SCRIPT[i].t){
+      msg.textContent = SCRIPT[i].text;
+      if (SCRIPT[i].showChild) childImg.classList.add('visible');
+      i++;
+    }
+  }
+
+  // Комбинираме rAF и setInterval за по-сигурно поведение в Safari
+  requestAnimationFrame(function loop(){ step(); requestAnimationFrame(loop); });
+  setInterval(step, 500);
+});
+
+// Минимално 3D (ако има lungs.gltf)
+const canvas3d = document.getElementById('webgl');
+let renderer, scene, camera;
+(function init3D(){
+  renderer = new THREE.WebGLRenderer({ canvas: canvas3d, alpha:true, antialias:true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+  camera.position.set(0,0,6);
+  const dl = new THREE.DirectionalLight(0xffffff,1.1); dl.position.set(1,2,2); scene.add(dl);
+  scene.add(new THREE.AmbientLight(0xffffff,0.6));
+  new THREE.GLTFLoader().load('assets/models/lungs.gltf', g=>scene.add(g.scene));
+  onResize(); window.addEventListener('resize', onResize);
+  animate();
+})();
+function onResize(){
+  const w = canvas3d.clientWidth = v.clientWidth;
+  const h = canvas3d.clientHeight = v.clientHeight;
+  renderer.setSize(w,h,false);
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+function animate(){ requestAnimationFrame(animate); if(renderer&&scene&&camera){ renderer.render(scene,camera);} }
+</script>
+</body>
+</html> 
