@@ -1,4 +1,169 @@
+<!doctype html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Амьд Бие — WebAR (Face Tracking Prototype)</title>
+  <style>
+    html,body{margin:0;height:100%;background:#000;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    #wrap{position:relative;height:100vh;overflow:hidden}
+    #video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)} /* огледален селфи изглед */
+    #webgl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+    #msg{position:absolute;left:0;right:0;top:64px;text-align:center;font-size:18px;line-height:1.45;text-shadow:0 2px 8px rgba(0,0,0,.7);padding:0 16px}
+    .ui{position:absolute;left:0;right:0;bottom:40px;display:flex;gap:8px;justify-content:center}
+    button{padding:12px 16px;border:0;border-radius:12px;font-weight:700;cursor:pointer}
+    .ghost{background:rgba(255,255,255,.18);color:#fff}
+    .primary{background:#ff7b47;color:#000}
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="webgl"></canvas>
+  <div id="msg">Натисни ▶️ Стартирай и разреши камерата. Кубът трябва да следва лицето.</div>
+  <div class="ui">
+    <button class="ghost" id="start">▶️ Стартирай</button>
+    <button class="primary" id="cta">Амьдралаа хамгаал</button>
+  </div>
+</div>
 
+<!-- Three.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/examples/js/loaders/GLTFLoader.min.js"></script>
+
+<!-- MediaPipe FaceMesh (класическата JS версия за web) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+const SITE_URL = "https://stefan064113.github.io/amid-bie-webar/";
+const video = document.getElementById('video');
+const msg   = document.getElementById('msg');
+
+document.getElementById('cta').addEventListener('click', ()=>{ location.href = SITE_URL; });
+
+let renderer, scene, camera, cube;
+let camReady = false, trackingReady = false;
+
+// --- Three.js сцената
+(function init3D(){
+  const canvas3d = document.getElementById('webgl');
+  renderer = new THREE.WebGLRenderer({ canvas: canvas3d, alpha:true, antialias:true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+  camera.position.set(0,0,6);
+
+  const dl = new THREE.DirectionalLight(0xffffff, 1.1);
+  dl.position.set(1,2,2); scene.add(dl);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+  // Временен обект: куб, който ще следва лицето
+  const geo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+  const mat = new THREE.MeshStandardMaterial({ color: 0xff7b47, metalness: 0.1, roughness: 0.7 });
+  cube = new THREE.Mesh(geo, mat);
+  cube.position.set(0,0,-3); // начална позиция в „камерно“ пространство
+  scene.add(cube);
+
+  onResize();
+  window.addEventListener('resize', onResize);
+  animate();
+})();
+
+function onResize(){
+  const w = renderer.domElement.clientWidth = video.clientWidth;
+  const h = renderer.domElement.clientHeight = video.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+
+// Помощ: трансформираме нормализирани 2D координати (0..1) от FaceMesh към 3D позиция на дадена дълбочина z
+function placeAtNormalized(x, y, z){
+  // Заради огледалния CSS, обръщаме x
+  const xx = 1 - x;
+  const yy = y;
+
+  // Пресмятаме ширина/височина на фрусума при дадена дълбочина
+  const fov = THREE.MathUtils.degToRad(camera.fov);
+  const heightAtZ = 2 * Math.tan(fov/2) * Math.abs(z);
+  const widthAtZ  = heightAtZ * camera.aspect;
+
+  const X = (xx - 0.5) * widthAtZ;
+  const Y = (0.5 - yy) * heightAtZ;
+  return new THREE.Vector3(X, Y, z);
+}
+
+// --- MediaPipe FaceMesh
+let facemesh, camStream;
+
+async function setupCamera(){
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+  video.srcObject = stream;
+  return new Promise(res => video.onloadedmetadata = ()=> res());
+}
+
+function centerOfFace(landmarks){
+  // стабилен център: взимаме средната стойност на всички точки (468)
+  let sx=0, sy=0, n = landmarks.length;
+  for (let i=0;i<n;i++){ sx += landmarks[i].x; sy += landmarks[i].y; }
+  return { x: sx/n, y: sy/n };
+}
+
+async function startTracking(){
+  msg.textContent = 'Зареждам FaceMesh...';
+  await setupCamera();
+  camReady = true;
+
+  facemesh = new FaceMesh.FaceMesh({
+    locateFile: (file)=> `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+  });
+  facemesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+
+  facemesh.onResults((results)=>{
+    if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0){
+      msg.textContent = 'Дръж лицето в кадър…';
+      return;
+    }
+    trackingReady = true;
+    msg.textContent = 'Окей — движа куба по лицето.';
+
+    const lm = results.multiFaceLandmarks[0];
+    const c = centerOfFace(lm); // {x,y} нормализирани 0..1
+
+    // Позиционираме куба на фиксирана дълбочина пред камерата (z = -3)
+    const target = placeAtNormalized(c.x, c.y, -3.0);
+    cube.position.copy(target);
+
+    // По желание: мащаб според „размера“ на лицето (разстояние между очите)
+    const leftEye = lm[33], rightEye = lm[263]; // индекси на очите в FaceMesh
+    const eyeDist = Math.hypot(leftEye.x - rightEye.x, leftEye.y - rightEye.y);
+    const scale = THREE.MathUtils.clamp(eyeDist * 10, 0.6, 2.0);
+    cube.scale.setScalar(scale);
+  });
+
+  // MediaPipe camera helper -> подава кадри към FaceMesh
+  const mpCam = new Camera(video, {
+    onFrame: async () => { await facemesh.send({ image: video }); },
+    width: 640, height: 480
+  });
+  mpCam.start();
+}
+
+document.getElementById('start').addEventListener('click', startTracking);
+</script>
+</body>
+</html>
 
  
 
